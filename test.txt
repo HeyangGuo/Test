@@ -1,198 +1,99 @@
-std::vector<cv::Point2f> new_img_points;
-std::vector<cv::Point2f> new_world_points;
-std::vector<cv::Point2f> img_points;
-std::vector<cv::Point2f> world_points;
-
-void choose_points_in_board(cv::Mat &img, cv::Mat &img_new,
-                            cv::Mat &img_new_bk);
-void OnButtonClick(int event, int x, int y, int flags, void *userdata);
-void DrawCorners(const cv::Mat &src, cv::Mat &dst);
-void ManuallySetPoint(const cv::Mat &img_bk, cv::Mat &img_click, cv::Mat &img);
-void ManuallyAdjustCorner(const cv::Mat &img_bk, cv::Mat &img);
-void help();
-
-void choose_points_in_board(cv::Mat &img, cv::Mat &img_new,
-                            cv::Mat &img_new_bk) {
-  cv::Mat img_ = img.clone();
-  cv::cvtColor(img, img, CV_GRAY2BGR);
-  cv::imwrite("origin_image.png", img);
-  img = img.rowRange(image_row_offset, img.rows);
-  cv::Mat img_click = img.clone();
-  cv::Mat img_bk = img.clone();
-
-  // set point and adjust
-  std::cout << "Whether to manually select points(y/n): ";
-  char is_manually;
-  std::cin >> is_manually;
-  if (is_manually == 'y' || is_manually == 'Y') {
-    ManuallySetPoint(img_bk, img_click, img);
-  }
-
-  std::cout << "Whether to manually adjust the corrected corners?(y/n): ";
-  std::cin >> is_manually;
-  while (is_manually == 'y' || is_manually == 'Y') {
-    ManuallyAdjustCorner(img_bk, img);
-    std::cout
-        << "Whether to manually adjust the corrected corners again?(y/n): ";
-    std::cin >> is_manually;
-  }
-  img_new = img;
-  img_new_bk = img_bk;
-}
-
-void OnButtonClick(int event, int x, int y, int flags, void *userdata) {
-  cv::Mat img = *((cv::Mat *)userdata);
-  float u = 0;
-  float v = 0;
-  float square_x = 0;
-  float square_y = 0;
-
-  if (event == cv::EVENT_LBUTTONDOWN) {
-    u = 1.0 * x;
-    v = 1.0 * y;
-    cv::Point2f img_point = cv::Point2f(u, v);
-    char point_info[100];
-    sprintf(point_info, " u : %.2f v : %.2f", u, v);
-    cv::circle(img, img_point, 2, cv::Scalar(255, 0, 0), 2);
-    cv::putText(img, std::string(point_info), img_point,
-                cv::FONT_HERSHEY_DUPLEX, 0.6, cv::Scalar(0, 0, 255), 0.6, 8);
-    cv::imshow("Image", img);
-    cv::waitKey(10);
-    std::cout << "please input world square index (x) : " << std::endl;
-    std::cin >> square_x;
-    std::cout << "please input world square index (y) : " << std::endl;
-    std::cin >> square_y;
-    cv::Point2f world_point = cv::Point2f(1.0 * square_x, 1.0 * square_y);
-    std::cout << " x : " << world_point.x << std::endl;
-    std::cout << " y : " << world_point.y << std::endl;
-    new_img_points.push_back(img_point);
-    new_world_points.push_back(world_point);
-    sprintf(point_info, "x:%.2f y:%.2f", world_point.x, world_point.y);
-    cv::putText(img, std::string(point_info), img_point + cv::Point2f(0, 25),
-                cv::FONT_HERSHEY_DUPLEX, 0.6, cv::Scalar(0, 0, 255), 0.6, 4);
-    cv::imshow("Image", img);
-    cv::waitKey(10);
-  }
-}
-
-void DrawCorners(const cv::Mat &src, cv::Mat &dst) {
-  // draw subpixel chessborad corners
-  dst = src.clone();
+cv::Mat CameraSystemExtrinsicCalibUseBoard::CalcCameraSystemExtrinsic(
+    cv::Mat &img, Points_Image_World &points_of_image_world,
+    const std::string &img_file) {
+  std::vector<cv::Point2f> img_points = points_of_image_world.points_image;
+  std::vector<cv::Point2f> world_points = points_of_image_world.points_world;
+  // cv::Mat img_ = img.clone();
+  cv::Mat img_ = cv::imread(img_file, CV_LOAD_IMAGE_GRAYSCALE);
+  // prepare opengv data
+  opengv::bearingVectors_t bearings;
+  opengv::points_t points3D;
   for (size_t i = 0; i < img_points.size(); i++) {
-    cv::Point2f im_point = img_points[i];
-    cv::Point2f w_point = world_points[i];
-    cv::circle(dst, im_point, 2, cv::Scalar(255, 0, 0), 2);
-    char point_info[100];
-    sprintf(point_info, "u:%.2f v:%.2f", im_point.x, im_point.y);
-    std::cout << im_point.x << ", " << im_point.y << std::endl;
-    cv::putText(dst, std::string(point_info), im_point, cv::FONT_HERSHEY_DUPLEX,
-                0.6, cv::Scalar(0, 0, 255), 0.6, 4);
-    sprintf(point_info, "x:%.2f y:%.2f", w_point.x, w_point.y);
-    std::cout << w_point.x << ", " << w_point.y << std::endl;
-    cv::putText(dst, std::string(point_info), im_point + cv::Point2f(0, 25),
-                cv::FONT_HERSHEY_DUPLEX, 0.6, cv::Scalar(0, 0, 255), 0.6, 4);
-
-    sprintf(point_info, "corner index: %lu", i);
-    cv::putText(dst, std::string(point_info), im_point - cv::Point2f(0, 25),
-                cv::FONT_HERSHEY_DUPLEX, 0.6, cv::Scalar(0, 255, 0), 0.6, 4);
+    cv::Point2f point2d = img_points[i];
+    cv::Point2f worldpoint = world_points[i];
+    cv::Point3f p3 = camera_param_->Camera2World(
+        cv::Point2f(point2d.x, point2d.y + float(image_row_offset)));
+    bearings.push_back(opengv::bearingVector_t(p3.x, p3.y, p3.z));
+    points3D.push_back(opengv::point_t(worldpoint.x, worldpoint.y, 0));
   }
-  cv::imshow("precise corners ", dst);
-  cv::waitKey(1);
-}
+  cv::Mat Twc;
+  cv::Mat Twc_nonlinear;
+  Optimizer::CalculateTwc(Twc, Twc_nonlinear, bearings, points3D);
+  cv::Mat Tcw = Twc_nonlinear.inv();
+  cv::Mat Rcw = Tcw.rowRange(0, 3).colRange(0, 3);
+  cv::Mat tcw = Tcw.rowRange(0, 3).col(3);
+  ProjectChessboardPoints(img, Tcw, world_points, camera_param_,
+                          cv::Scalar(0, 255, 0));
+  ProjectChessboardPoints(img, Twc_nonlinear.inv(), world_points, camera_param_,
+                          cv::Scalar(0, 0, 255));
+  cv::imshow("ChessBoard Points Reprojection", img);
+  cv::waitKey(0);
+  
+  
+#include <opencv2/opencv.hpp>
+#include <opengv/absolute_pose/CentralAbsoluteAdapter.hpp>
+#include <opengv/absolute_pose/methods.hpp>
+#include <opengv/sac/Ransac.hpp>
+#include <opengv/sac_problems/absolute_pose/AbsolutePoseSacProblem.hpp>
 
-void Help() {
-  std::cout << "Enter 'a' to add corners." << std::endl;
-  std::cout << "Enter 'd' to delete extra corners." << std::endl;
-  std::cout << "    then, input the index of corner which you want to delete."
-            << std::endl;
-  std::cout << "Enter 'i' to adjust the corner image coord." << std::endl;
-  std::cout << "    then, input the offset of corner which you want to adjust."
-            << std::endl;
-  std::cout
-      << "    the right of image is in the positive direction of the x-axis."
-      << std::endl;
-  std::cout
-      << "    the top is of image in the positive direction of the y-axis."
-      << std::endl;
-  std::cout << "Enter 'w' to adjust the corner world coord." << std::endl;
-  std::cout << "    then, input the offset of corner which you want to adjust."
-            << std::endl;
-  std::cout
-      << "    the right of car is in the positive direction of the x-axis."
-      << std::endl;
-  std::cout
-      << "    the front of car is in the positive direction of the y-axis."
-      << std::endl;
-}
+void Optimizer::CalculateTwc(cv::Mat &Twc, cv::Mat &Twc_nonlinear,
+                             opengv::bearingVectors_t bearings,
+                             opengv::points_t points3D) {
 
-void ManuallySetPoint(const cv::Mat &img_bk, cv::Mat &img_click, cv::Mat &img) {
+  size_t iterations = 50;
 
-  cv::namedWindow("Image", cv::WINDOW_AUTOSIZE);
-  cv::setMouseCallback("Image", OnButtonClick, &img_click);
-  while (true) {
-    cv::imshow("Image", img_click);
-    int keycode = cv::waitKey(10);
-    if (keycode == 27)
-      break;
-  }
-  cv::destroyWindow("Image");
+  opengv::absolute_pose::CentralAbsoluteAdapter adapter(bearings, points3D);
+  opengv::sac::Ransac<
+      opengv::sac_problems::absolute_pose::AbsolutePoseSacProblem>
+      ransac;
+  std::shared_ptr<opengv::sac_problems::absolute_pose::AbsolutePoseSacProblem>
+      absposeproblem_ptr(
+          new opengv::sac_problems::absolute_pose::AbsolutePoseSacProblem(
+              adapter, opengv::sac_problems::absolute_pose::
+                           AbsolutePoseSacProblem::KNEIP));
 
-  std::cout << " starting find subpixel corners " << std::endl;
-  cv::cvtColor(img, img, CV_BGR2GRAY);
-  cv::cornerSubPix(
-      img, new_img_points, cv::Size(7, 7), cv::Size(-1, -1),
-      cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::MAX_ITER, 30,
-                       0.1));
-  for (int i = 0; i < new_img_points.size(); ++i) {
-    img_points.push_back(new_img_points[i]);
-    world_points.push_back(new_world_points[i]);
-  }
-  new_img_points.clear();
-  new_world_points.clear();
-  cv::cvtColor(img, img, CV_GRAY2BGR);
+  std::vector<int> inliers;
 
-  DrawCorners(img_bk, img);
-}
+  ransac.sac_model_ = absposeproblem_ptr;
+  ransac.threshold_ = 0.02;
+  ransac.max_iterations_ = 200;
+  ransac.computeModel();
+  inliers = ransac.inliers_;
+  opengv::transformation_t trafo = ransac.model_coefficients_;
 
-void ManuallyAdjustCorner(const cv::Mat &img_bk, cv::Mat &img) {
-  Help();
-  int square_x = 0;
-  int square_y = 0;
-  std::cout << "please choose what to do('a' or 'd' or 'i' or 'w'): ";
-  char which_operation;
-  std::cin >> which_operation;
-  if (which_operation == 'a' || which_operation == 'A') {
-    ManuallySetPoint(img_bk, img, img);
-  } else if (which_operation == 'd' || which_operation == 'D') {
-    std::cout << "please input which corner you want to delete: ";
-    int d_index;
-    std::cin >> d_index;
-    if (d_index >= 0 && d_index < img_points.size()) {
-      img_points.erase(img_points.begin() + d_index);
-      world_points.erase(world_points.begin() + d_index);
-    }
-  } else if (which_operation == 'i' || which_operation == 'I') {
-    std::cout << "please input which corner you want to adjust: ";
-    int d_index;
-    std::cin >> d_index;
-    if (d_index >= 0 && d_index < img_points.size()) {
-      std::cout << "please input the offset if x-axis: " << std::endl;
-      std::cin >> square_x;
-      std::cout << "please input the offset if y-axis: " << std::endl;
-      std::cin >> square_y;
-      img_points[d_index] += cv::Point2f(square_x, square_y);
-    }
-  } else if (which_operation == 'w' || which_operation == 'W') {
-    std::cout << "please input which corner you want to adjust: ";
-    int d_index;
-    std::cin >> d_index;
-    if (d_index >= 0 && d_index < img_points.size()) {
-      std::cout << "please input the offset if x-axis: " << std::endl;
-      std::cin >> square_x;
-      std::cout << "please input the offset if y-axis: " << std::endl;
-      std::cin >> square_y;
-      world_points[d_index] += cv::Point2f(square_x, square_y);
+  std::cout << " Kneip PnP result : " << std::endl;
+  std::cout << trafo << std::endl;
+
+  Twc = cv::Mat::eye(4, 4, CV_32F);
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 4; j++) {
+      Twc.at<float>(i, j) = (float)trafo(i, j);
     }
   }
-  DrawCorners(img_bk, img);
+
+  // use nonlinear optimization to get better result
+  opengv::translation_t position;
+  opengv::rotation_t rotation;
+  for (int i = 0; i < 3; i++) {
+    position(i) = trafo(i, 3);
+    for (int j = 0; j < 3; j++) {
+      rotation(i, j) = trafo(i, j);
+    }
+  }
+  adapter.setR(rotation);
+  adapter.sett(position);
+
+  std::cout << rotation << std::endl;
+  std::cout << position << std::endl;
+  for (int i = 0; i < iterations; i++)
+    trafo = opengv::absolute_pose::optimize_nonlinear(adapter);
+  std::cout << " nonlinear optimization result : " << std::endl;
+  std::cout << trafo << std::endl;
+
+  Twc_nonlinear = cv::Mat::eye(4, 4, CV_32F);
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 4; j++) {
+      Twc_nonlinear.at<float>(i, j) = (float)trafo(i, j);
+    }
+  }
 }
